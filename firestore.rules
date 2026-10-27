@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function memberPath(storeId) {
+      return /databases/$(database)/documents/stores/$(storeId)/members/$(request.auth.uid);
+    }
+    function isMember(storeId) {
+      return signedIn() && exists(memberPath(storeId));
+    }
+    function memberRole(storeId) {
+      return get(memberPath(storeId)).data.role;
+    }
+    function isOwner(storeId) {
+      return isMember(storeId) && memberRole(storeId) == 'owner';
+    }
+    function isCashier(storeId) {
+      return isMember(storeId) && memberRole(storeId) == 'cashier';
+    }
+
+    match /stores/{storeId}/members/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isOwner(storeId));
+      allow write: if isOwner(storeId);
+    }
+
+    match /stores/{storeId}/meta/{docId} {
+      allow read: if isMember(storeId);
+      allow write: if isOwner(storeId);
+    }
+
+    match /stores/{storeId}/backups/{backupId} {
+      allow create: if isMember(storeId);
+      allow read, update, delete: if isOwner(storeId);
+    }
+
+    match /stores/{storeId}/{collectionName}/{docId} {
+      allow read: if isMember(storeId);
+      allow create, update: if isOwner(storeId) ||
+        (isCashier(storeId) && collectionName in ['transactions', 'services', 'pulsaTransactions'] &&
+         request.resource.data.deleted == false);
+      allow delete: if isOwner(storeId);
+    }
+  }
+}
